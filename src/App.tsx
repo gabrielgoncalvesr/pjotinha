@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
 import { mockTasks } from "./features/tasks/mockTasks";
 import { TaskSheet } from "./features/tasks/TaskSheet";
-import { formatDate } from "./lib/date";
 import type { Task } from "./types/task";
 
 const TASKS_STORAGE_KEY = "pjotinha.tasks.v1";
@@ -62,24 +61,23 @@ function projectedTaskForMonth(task: Task, anchor: Date): Task | null {
   const taskDate = new Date(`${task.dueDate}T00:00:00`);
   const isSameMonth = taskDate.getFullYear() === anchor.getFullYear() && taskDate.getMonth() === anchor.getMonth();
 
-  if (task.recurrence === "none" && !isSameMonth) {
-    return null;
-  }
+  if (task.recurrence === "none" && !isSameMonth) return null;
 
   const year = task.recurrence === "monthly" ? anchor.getFullYear() : taskDate.getFullYear();
   const month = task.recurrence === "monthly" ? anchor.getMonth() : taskDate.getMonth();
 
-  if (task.dueMode === "last_day") {
-    return { ...task, dueDate: isoDate(new Date(year, month + 1, 0)) };
-  }
-
-  if (task.dueMode === "last_business_day") {
-    return { ...task, dueDate: isoDate(lastBusinessDayOfMonth(year, month)) };
-  }
+  if (task.dueMode === "last_day") return { ...task, dueDate: isoDate(new Date(year, month + 1, 0)) };
+  if (task.dueMode === "last_business_day") return { ...task, dueDate: isoDate(lastBusinessDayOfMonth(year, month)) };
 
   const lastDay = new Date(year, month + 1, 0).getDate();
   const day = Math.min(taskDate.getDate(), lastDay);
   return { ...task, dueDate: isoDate(new Date(year, month, day)) };
+}
+
+function formatGroupDate(iso: string) {
+  const [y, m, d] = iso.split("-").map(Number);
+  if (!y || !m || !d) return iso;
+  return new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(new Date(y, m - 1, d));
 }
 
 function App() {
@@ -112,9 +110,7 @@ function App() {
       }
     }
     hydrateFromDb();
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -123,9 +119,7 @@ function App() {
     invoke("save_task_state", {
       tasksJson: JSON.stringify(tasks),
       doneByMonthJson: JSON.stringify(doneByMonth),
-    }).catch(() => {
-      // Ignore persistence errors, keep app responsive.
-    });
+    }).catch(() => {});
     localStorage.setItem(TASKS_STORAGE_KEY, JSON.stringify(tasks));
     localStorage.setItem(DONE_STORAGE_KEY, JSON.stringify(doneByMonth));
   }, [doneByMonth, hydrated, tasks]);
@@ -149,7 +143,25 @@ function App() {
         .sort((a, b) => dateSortKey(a.dueDate) - dateSortKey(b.dueDate)),
     [anchor, doneByMonth, tasks],
   );
+
   const completedThisMonth = doneByMonth[currentMonthKey] ?? [];
+
+  const grouped = useMemo(() => {
+    const groups: { date: string; tasks: Task[] }[] = [];
+    for (const task of ordered) {
+      const last = groups[groups.length - 1];
+      if (last && last.date === task.dueDate) {
+        last.tasks.push(task);
+      } else {
+        groups.push({ date: task.dueDate, tasks: [task] });
+      }
+    }
+    return groups;
+  }, [ordered]);
+
+  const doneCount = completedThisMonth.filter((id) => ordered.some((t) => t.id === id)).length;
+  const pendingCount = ordered.length - doneCount;
+  const nextDueTask = ordered.find((t) => !completedThisMonth.includes(t.id));
 
   function upsertTask(payload: Omit<Task, "id" | "priority"> & { id?: string; priority?: number }) {
     if (payload.id) {
@@ -157,14 +169,11 @@ function App() {
         const current = [...prev].sort((a, b) => a.priority - b.priority);
         const index = current.findIndex((task) => task.id === payload.id);
         if (index < 0) return prev;
-
         const updated = { ...current[index], ...payload };
         current.splice(index, 1);
-
         const rawTarget = payload.priority ?? updated.priority ?? current.length + 1;
         const target = Math.min(Math.max(rawTarget - 1, 0), current.length);
         current.splice(target, 0, updated as Task);
-
         return current.map((task, idx) => ({ ...task, priority: idx + 1 }));
       });
       return;
@@ -192,43 +201,94 @@ function App() {
   }
 
   return (
-    <main className="fixed-app-wrap">
-      <section className="fixed-app">
-        <header className="mobile-head-simple">
-          <div className="month-nav">
-            <button className="month-nav-btn" onClick={() => setAnchor((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1))} aria-label="Previous month">
-              &lt;
-            </button>
-            <h1>{monthLabelTitle}</h1>
-            <button className="month-nav-btn" onClick={() => setAnchor((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1))} aria-label="Next month">
-              &gt;
+    <main className="app-wrap">
+      <section className="app-shell">
+        <header className="app-header">
+          <div className="header-top">
+            <span className="app-brand">PJotinha</span>
+            <button
+              className="btn-new"
+              onClick={() => { setEditingTask(null); setSheetOpen(true); }}
+              aria-label="New task"
+            >
+              <span aria-hidden="true">+</span> New Task
             </button>
           </div>
+
+          <div className="month-row">
+            <button
+              className="month-nav-btn"
+              onClick={() => setAnchor((d) => new Date(d.getFullYear(), d.getMonth() - 1, 1))}
+              aria-label="Previous month"
+            >
+              ‹
+            </button>
+            <h1 className="month-title">{monthLabelTitle}</h1>
+            <button
+              className="month-nav-btn"
+              onClick={() => setAnchor((d) => new Date(d.getFullYear(), d.getMonth() + 1, 1))}
+              aria-label="Next month"
+            >
+              ›
+            </button>
+          </div>
+
+          {ordered.length > 0 && (
+            <div className="month-stats">
+              <span>{ordered.length} tasks</span>
+              <span className="stats-sep">·</span>
+              <span className="stats-done">{doneCount} done</span>
+              <span className="stats-sep">·</span>
+              <span className="stats-pending">{pendingCount} pending</span>
+              {nextDueTask && (
+                <>
+                  <span className="stats-sep">·</span>
+                  <span>Next: {formatGroupDate(nextDueTask.dueDate)}</span>
+                </>
+              )}
+            </div>
+          )}
         </header>
 
-        <ul className="mobile-task-list">
-          {ordered.map((task) => (
-            <li key={task.id} className="mobile-task-row">
-              <label className="check-wrap">
-                <input
-                  type="checkbox"
-                  checked={completedThisMonth.includes(task.id)}
-                  onChange={() => toggleDone(task.id)}
-                />
-                <span aria-hidden="true" />
-              </label>
-              <button className="task-text-btn" onClick={() => { setEditingTask(task); setSheetOpen(true); }}>
-                <strong className={completedThisMonth.includes(task.id) ? "is-done" : ""}>{task.title}</strong>
-              </button>
-              <span className="task-due-col">{formatDate(task.dueDate, "pt-BR")}</span>
-              <span className={`task-status-badge status-${task.status}`}>{task.status}</span>
-            </li>
+        <div className="task-scroll">
+          {grouped.length === 0 && (
+            <p className="empty-state">No tasks this month.</p>
+          )}
+          {grouped.map((group) => (
+            <div key={group.date} className="date-group">
+              <div className="date-group-hd">
+                <span className="date-group-label">{formatGroupDate(group.date)}</span>
+                <span className="date-group-count">
+                  {group.tasks.length} {group.tasks.length === 1 ? "task" : "tasks"}
+                </span>
+              </div>
+              <ul className="group-tasks">
+                {group.tasks.map((task) => {
+                  const isDone = completedThisMonth.includes(task.id);
+                  return (
+                    <li key={task.id} className={`task-row${isDone ? " task-row--done" : ""}`}>
+                      <label className="check-wrap">
+                        <input
+                          type="checkbox"
+                          checked={isDone}
+                          onChange={() => toggleDone(task.id)}
+                        />
+                        <span aria-hidden="true" />
+                      </label>
+                      <button
+                        className="task-title-btn"
+                        onClick={() => { setEditingTask(task); setSheetOpen(true); }}
+                      >
+                        <span className={isDone ? "title-done" : ""}>{task.title}</span>
+                      </button>
+                      <span className={`status-dot status-dot--${task.status}`} title={task.status} />
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
           ))}
-        </ul>
-
-        <button className="fab-add" onClick={() => { setEditingTask(null); setSheetOpen(true); }} aria-label="New task">
-          <span aria-hidden="true">+</span> New Task
-        </button>
+        </div>
       </section>
 
       <TaskSheet
