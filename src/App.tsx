@@ -83,7 +83,7 @@ function formatGroupDate(iso: string) {
 
 function App() {
   const [tasks, setTasks] = useState<Task[]>(() => loadStoredTasks());
-  const [anchor, setAnchor] = useState(() => new Date(2026, 4, 1));
+  const [anchor, setAnchor] = useState(() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1); });
   const [sheetOpen, setSheetOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
   const [doneByMonth, setDoneByMonth] = useState<Record<string, string[]>>(() => loadStoredDoneByMonth());
