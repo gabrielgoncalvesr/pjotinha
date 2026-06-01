@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import "./App.css";
+import appLogo from "./assets/pjotinha_app_logo.svg";
 import { mockTasks } from "./features/tasks/mockTasks";
 import { TaskSheet } from "./features/tasks/TaskSheet";
 import type { Task } from "./types/task";
@@ -205,7 +206,10 @@ function App() {
       <section className="app-shell">
         <header className="app-header">
           <div className="header-top">
-            <span className="app-brand">PJotinha</span>
+            <span className="app-brand">
+              <img src={appLogo} alt="PJotinha" className="app-logo" />
+              PJotinha
+            </span>
             <button
               className="btn-new"
               onClick={() => { setEditingTask(null); setSheetOpen(true); }}
